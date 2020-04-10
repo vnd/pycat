@@ -37,15 +37,22 @@ class TimerMixin(object):
             return rem_time
 
         remove = []
-        for name, timer in self.timers.items():
-            oneshot, period, remaining, fn = timer
-            remaining = update(name, remaining - delta)
-            if remaining < 0:
-                if oneshot:
-                    remove.append(name)
-                else:
-                    update(name, period)
-                fn()
+        try:
+            for name, timer in self.timers.items():
+                oneshot, period, remaining, fn = timer
+                remaining = update(name, remaining - delta)
+                if remaining < 0:
+                    if oneshot:
+                        remove.append(name)
+                    else:
+                        update(name, period)
+                    try:
+                        fn(self)
+                    except Exception as e:
+                        self.log(e)
+        except RuntimeError as e:
+            # RuntimeError: dictionary changed size during iteration
+            self.log(e)
 
         for name in remove:
             del self.timers[name]
@@ -160,8 +167,11 @@ class ModularClient(TimerMixin):
     def send(self, *args):
         self.mud.send(*args)
 
-    def log(self, *args):
-        self.mud.log(*args)
+    def log(self, *args, **kwargs):
+        self.mud.log(*args, **kwargs)
+
+    def show(self, *args):
+        self.mud.show(*args)
 
     def getTimers(self):
         return {}

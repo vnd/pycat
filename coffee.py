@@ -32,7 +32,7 @@ def honed(mud, groups):
     if 'hones' not in mud.state:
         mud.state['hones'] = {}
     mud.state['hones'][skill] = time.time()
-    mud.timers["hone_" + skill] = mud.mkdelay(301, lambda: mud.log("You can now hone " + skill))
+    mud.timers["hone_" + skill] = mud.mkdelay(301, lambda m: mud.log("You can now hone " + skill))
 
 
 def showHones(mud, _):
@@ -45,25 +45,28 @@ def showHones(mud, _):
                 remove.add(skill)
             else:
                 found = True
-                mud.log("{}: {}s remaining".format(skill, 300 - int(now - honetime)))
+                mud.show("{}: {}s remaining\n".format(skill, 300 - int(now - honetime)))
         for skill in remove:
             del mud.state['hones'][skill]
         if not mud.state['hones']:
             del mud.state['hones']
     if not found:
-        mud.log("No skills honed recently")
+        mud.show("No skills honed recently")
 
 
 ALIASES = {
-        'home': 'run 6s w 2s e 2n\nopen w\nw',
+        'home': 'run 6s w 2s e 2n\nunlock w\nopen w\nw\nlock e',
         'rt vassendar': 'run 4s d w d 2w d 2n 2e\nopen s\ns\nopen d\nrun 5d\nopen w\nw\nrun 8n w 2s 6w\nopen w\nrun 11w 3n 3w\nopen w\nrun 5w\nrun 3n 5w',
         'rt wgate': 'run 2s 3w\nopen w\nw',
         'rt sehaire': 'run w u 6w 2n 3w s 6w s 6w 2n 5w 5n w n w n 4w n e',
+        'rt magic-forest': 'go 2S  3w\n open w\n go 2W  U  W  S  6W  9N W  U  N  E  N  W  2D  N  E  3N  W  5N  W  N  W  N  4W  N  E',
+        'rt sengalion': 'go 2S  3w\n open w\n go 2w U  6W  2N  3W  S  6W  S  3W  7S  6E  S',
         '#hone (.+)': hone,
         '#hones': showHones,
         }
 
 TRIGGERS = {
+        'Grumpy wants you to try to teach him about .*\. It will': 'y',
         'You feel a little cleaner, but are still very dirty.': 'bathe',
         'You feel a little cleaner.': 'bathe',
         'You feel a little cleaner; almost perfect.': 'bathe',
@@ -74,9 +77,13 @@ TRIGGERS = {
         'YOU ARE DYING OF THIRST!': 'drink barrel\nquit\ny',
         'YOU ARE DYING OF HUNGER!': 'eat bread\nquit\ny',
         'You start .*\.': trackTimeStart,
+        'You study .*\.': trackTimeStart,
         'You are done (.*)\.': lambda mud, matches: mud.mud.log("The task took {}s".format(time.time() - mud.state['task_start_time'])),
         'You become better at (.+).': honed,
+        '.* subtly sets something on the ground.': 'get bag\nput bag box\nexam box',
         }
+with open('passwords.json', 'rb') as pws:
+    TRIGGERS.update(json.load(pws))
 
 
 class Coffee(modular.ModularClient):
@@ -88,25 +95,29 @@ class Coffee(modular.ModularClient):
 
         import modules.logging
         import modules.eval
-        import modules.repeat
         import modules.mapper
         importlib.reload(modular)
         importlib.reload(modules.logging)
         importlib.reload(modules.eval)
-        importlib.reload(modules.repeat)
         importlib.reload(modules.mapper)
 
         self.modules = {}
         mods = {
                 'eval': (modules.eval.Eval, []),
-                'repeat': (modules.repeat.Repeat, []),
                 'logging': (modules.logging.Logging, [self.logfname]),
                 'mapper': (modules.mapper.Mapper, [False, self.mapfname]),
                 }
-        if name == 'grumpy':
-            import modules.gaoler
-            importlib.reload(modules.gaoler)
-            mods['gaoler'] = (modules.gaoler.Gaoler, [])
+        if name == 'grumpy' or name == 'grumpier' or name == 'grumpiest':
+            import modules.scholar
+            importlib.reload(modules.scholar)
+            mods['scholar'] = (modules.scholar.Scholar, [])
+        elif name == 'vassal' or name == 'robot':
+            import modules.autosmith
+            importlib.reload(modules.autosmith)
+            mods['autosmith'] = (modules.autosmith.AutoSmith, [])
+        elif name == 'punchee':
+            mods['mapper'] = (modules.mapper.Mapper, [False, 'coffee.map'])
+
         for modname, module in mods.items():
             try:
                 constructor, args = module
@@ -120,6 +131,7 @@ class Coffee(modular.ModularClient):
 
         self.aliases.update(ALIASES)
         self.triggers.update(TRIGGERS)
+        self.triggers.update({r'\(Enter your character name to login\)': name})
 
         if name == 'zerleha':
             self.triggers.update({
@@ -127,6 +139,15 @@ class Coffee(modular.ModularClient):
                 'You are hungry.': 'eat bread',
                 'You are thirsty.': 'drink drum',
                 })
+        if name == 'punchee':  # group leader
+            self.aliases.update({
+                'waa': 'sta\nwake cizra\nwake basso',
+                })
+        if name == 'basso' or name == 'cizra':  # followers
+            self.triggers.update({
+                    'Punchee lays down and takes a nap.': 'sleep',
+                    })
+
         if name == 'cizra':
             self.triggers.update({
                     '(\w+): A closed door': lambda mud, matches: 'open ' + matches[0],
@@ -167,12 +188,15 @@ class Coffee(modular.ModularClient):
     def level(self):
         return self.gmcp['char']['status']['level']
 
-    def exprate(self):
+    def exprate(self, mud):
+        if 'char' not in self.gmcp or 'status' not in self.gmcp['char'] or 'tnl' not in self.gmcp['char']['status']:
+            return
+
         if 'exprate_prev' not in self.state:
-            self.state['exprate_prev'] = self.gmcp['char']['status']['tnl']
+            self.state['exprate_prev'] = self.gmcp['char']['base']['perlevel'] - self.gmcp['char']['status']['tnl']
         else:
-            now = self.gmcp['char']['status']['tnl']
-            self.log("Exp per hour: {}".format(self.state['exprate_prev'] - now))
+            now = self.gmcp['char']['base']['perlevel'] - self.gmcp['char']['status']['tnl']
+            self.log("Exp per hour: {}".format(now - self.state['exprate_prev']))
             self.state['exprate_prev'] = now
 
 
@@ -188,8 +212,12 @@ class Coffee(modular.ModularClient):
                 self.log("Rested!")
 
         if cmd == 'char.vitals' and 'maxstats' in self.gmcp['char']:
-            if self.gmcp['char']['status']['pos'] == 'Sleeping' and self.gmcp['char']['vitals']['hp'] == self.gmcp['char']['maxstats']['maxhp']:
-                # self.log("Healed!")
+            if 'prevhp' in self.state and self.gmcp['char']['status']['pos'] == 'Sleeping':
+                hp = self.gmcp['char']['vitals']['hp']
+                maxhp = self.gmcp['char']['maxstats']['maxhp']
+                if hp == maxhp and self.state['prevhp'] < maxhp:
+                    self.log("Healed!")
+                self.state['prevhp'] = hp
                 pass
 
         if cmd == 'char.vitals' and 'maxstats' in self.gmcp['char']:
